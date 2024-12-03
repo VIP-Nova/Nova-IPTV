@@ -1,0 +1,363 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Tv, Search, Heart, Settings, ChevronLeft, Grid, List, X, Film, Calendar, AlertCircle, Play, Clock, MinusCircle, Maximize2, Download, PictureInPicture, Loader } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+
+const categories = [
+  { id: 'all', name: 'Tout', icon: <Tv className="w-4 h-4" /> },
+  { id: 'movies', name: 'Films', icon: <Film className="w-4 h-4" /> },
+  { id: 'series', name: 'Séries', icon: <Calendar className="w-4 h-4" /> }
+];
+
+const IPTVApp = () => {
+  const [channels, setChannels] = useState([]);
+  const [selectedChannel, setSelectedChannel] = useState(null);
+  const [viewMode, setViewMode] = useState('grid');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [configType, setConfigType] = useState('m3u');
+  const [m3uUrl, setM3uUrl] = useState('');
+  const [xtreamConfig, setXtreamConfig] = useState({ url: '', username: '', password: '' });
+  const [isConfigured, setIsConfigured] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
+  const [miniPlayerEnabled, setMiniPlayerEnabled] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState('all');
+
+  const videoRef = useRef(null);
+
+  const handleConfig = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      if (configType === 'm3u') {
+        const response = await fetch(m3uUrl);
+        if (!response.ok) throw new Error('URL invalide');
+        
+        const content = await response.text();
+        const lines = content.split('\n');
+        let parsedChannels = [];
+        let currentChannel = null;
+
+        lines.forEach(line => {
+          line = line.trim();
+          if (line.startsWith('#EXTINF:')) {
+            const info = line.split(',');
+            const name = info[1] || 'Canal sans nom';
+            currentChannel = { name };
+          } else if (line.startsWith('http') && currentChannel) {
+            currentChannel.url = line;
+            currentChannel.id = parsedChannels.length + 1;
+            currentChannel.logo = '/api/placeholder/50/50';
+            parsedChannels.push(currentChannel);
+            currentChannel = null;
+          }
+        });
+
+        setChannels(parsedChannels);
+        localStorage.setItem('iptv_config', JSON.stringify({ type: 'm3u', url: m3uUrl }));
+      } else {
+        // Configuration Xtream
+        if (!xtreamConfig.url || !xtreamConfig.username || !xtreamConfig.password) {
+          throw new Error('Veuillez remplir tous les champs');
+        }
+
+        const baseUrl = xtreamConfig.url.replace(/\/$/, '');
+        const response = await fetch(
+          `${baseUrl}/player_api.php?username=${xtreamConfig.username}&password=${xtreamConfig.password}`
+        );
+        
+        if (!response.ok) throw new Error('Configuration invalide');
+        
+        const data = await response.json();
+        if (!data.user_info || data.user_info.auth === 0) {
+          throw new Error('Authentification échouée');
+        }
+
+        const streamsResponse = await fetch(
+          `${baseUrl}/player_api.php?username=${xtreamConfig.username}&password=${xtreamConfig.password}&action=get_live_streams`
+        );
+        
+        const streams = await streamsResponse.json();
+        const formattedChannels = streams.map(stream => ({
+          id: stream.stream_id,
+          name: stream.name,
+          logo: stream.stream_icon || '/api/placeholder/50/50',
+          category: stream.category_name || 'Non classé',
+          url: `${baseUrl}/live/${xtreamConfig.username}/${xtreamConfig.password}/${stream.stream_id}.m3u8`
+        }));
+
+        setChannels(formattedChannels);
+        localStorage.setItem('iptv_config', JSON.stringify(xtreamConfig));
+      }
+
+      setIsConfigured(true);
+      setShowConfig(false);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="h-screen bg-black text-white">
+      {selectedChannel ? (
+        <div className="relative h-full">
+          <div className={`relative ${miniPlayerEnabled ? 'fixed bottom-4 right-4 w-80 h-48 z-50' : 'h-full'}`}>
+            <video
+              ref={videoRef}
+              className="w-full h-full bg-black"
+              controls
+              playsInline
+              autoPlay
+              crossOrigin="anonymous"
+              src={selectedChannel?.url || selectedChannel?.urlTS || selectedChannel?.urlM3U8}
+              onError={(e) => {
+                console.error('Erreur vidéo:', e);
+                // Si une URL échoue, essayer la suivante
+                const video = e.target;
+                if (video.src === selectedChannel?.url && selectedChannel?.urlTS) {
+                  video.src = selectedChannel.urlTS;
+                } else if (video.src === selectedChannel?.urlTS && selectedChannel?.urlM3U8) {
+                  video.src = selectedChannel.urlM3U8;
+                }
+              }}
+            />
+
+            <div className="absolute top-4 right-4 space-x-2 flex items-center bg-black/50 rounded-lg p-2">
+              <button
+                onClick={() => setMiniPlayerEnabled(!miniPlayerEnabled)}
+                className="p-1 hover:bg-black/50 rounded-full text-white"
+              >
+                {miniPlayerEnabled ? <Maximize2 className="w-5 h-5" /> : <MinusCircle className="w-5 h-5" />}
+              </button>
+            </div>
+
+            <button
+              onClick={() => setSelectedChannel(null)}
+              className="absolute top-4 left-4 p-2 bg-black/50 hover:bg-black/70 rounded-full text-white"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <header className="bg-gray-900 border-b border-gray-800 p-4 safe-area-top">
+            <div className="flex items-center justify-between mb-4">
+              <h1 className="text-xl font-bold">IPTV Premium</h1>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => setViewMode(prev => prev === 'grid' ? 'list' : 'grid')}
+                  className="p-2 hover:bg-gray-700 rounded-full"
+                >
+                  {viewMode === 'grid' ? <List className="w-5 h-5" /> : <Grid className="w-5 h-5" />}
+                </button>
+                <button
+                  onClick={() => setShowConfig(true)}
+                  className="p-2 hover:bg-gray-700 rounded-full"
+                >
+                  <Settings className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="search"
+                placeholder="Rechercher une chaîne..."
+                className="w-full bg-gray-800 text-white pl-10 pr-4 py-2 rounded-lg"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+          </header>
+
+          <div className="overflow-x-auto p-4">
+            <div className="flex space-x-2">
+              {categories.map(category => (
+                <button
+                  key={category.id}
+                  onClick={() => setSelectedCategory(category.id)}
+                  className={`flex items-center space-x-2 px-4 py-2 rounded-full ${
+                    selectedCategory === category.id ? 'bg-cyan-500' : 'bg-gray-800'
+                  }`}
+                >
+                  {category.icon}
+                  <span>{category.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <main className="flex-1 overflow-auto p-4 safe-area-bottom">
+            <div className={`grid grid-cols-2 md:grid-cols-3 gap-4`}>
+              {channels
+                .filter(channel => channel.name.toLowerCase().includes(searchTerm.toLowerCase()))
+                .map(channel => (
+                  <Card
+                    key={channel.id}
+                    className="bg-gray-800 hover:bg-gray-700 transition-colors cursor-pointer"
+                    onClick={() => setSelectedChannel(channel)}
+                  >
+                    <CardContent className="p-4">
+                      <div className="flex items-center space-x-3">
+                        <img
+                          src={channel.logo}
+                          alt={channel.name}
+                          className="w-12 h-12 rounded object-cover bg-gray-900"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-medium truncate">
+                            {channel.name}
+                          </h3>
+                          <p className="text-sm text-gray-400 truncate">
+                            {channel.category}
+                          </p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+            </div>
+          </main>
+        </>
+      )}
+
+      {showConfig && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+          <div className="bg-gray-900 rounded-lg max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold">Configuration</h2>
+              <button 
+                onClick={() => setShowConfig(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <div className="flex space-x-4 mb-4">
+                  <button
+                    className={`flex-1 py-2 rounded-lg transition-colors ${
+                      configType === 'm3u' ? 'bg-cyan-500' : 'bg-gray-800'
+                    }`}
+                    onClick={() => setConfigType('m3u')}
+                  >
+                    M3U
+                  </button>
+                  <button
+                    className={`flex-1 py-2 rounded-lg transition-colors ${
+                      configType === 'xtream' ? 'bg-cyan-500' : 'bg-gray-800'
+                    }`}
+                    onClick={() => setConfigType('xtream')}
+                  >
+                    Xtream
+                  </button>
+                </div>
+
+                {configType === 'm3u' ? (
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">
+                      URL de la playlist M3U
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="http://exemple.com/playlist.m3u"
+                      className="w-full p-2 bg-gray-800 rounded border border-gray-700"
+                      value={m3uUrl}
+                      onChange={(e) => setM3uUrl(e.target.value)}
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        URL du serveur
+                      </label>
+                      <input
+                        type="url"
+                        placeholder="http://exemple.com:8080"
+                        className="w-full p-2 bg-gray-800 rounded border border-gray-700"
+                        value={xtreamConfig.url}
+                        onChange={(e) => setXtreamConfig(prev => ({
+                          ...prev,
+                          url: e.target.value
+                        }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        Nom d'utilisateur
+                      </label>
+                      <input
+                        type="text"
+                        className="w-full p-2 bg-gray-800 rounded border border-gray-700"
+                        value={xtreamConfig.username}
+                        onChange={(e) => setXtreamConfig(prev => ({
+                          ...prev,
+                          username: e.target.value
+                        }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        Mot de passe
+                      </label>
+                      <input
+                        type="password"
+                        className="w-full p-2 bg-gray-800 rounded border border-gray-700"
+                        value={xtreamConfig.password}
+                        onChange={(e) => setXtreamConfig(prev => ({
+                          ...prev,
+                          password: e.target.value
+                        }))}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {error && (
+                  <Alert className="mt-4 bg-red-900/50 border-red-800">
+                    <AlertDescription className="text-red-200">
+                      {error}
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="flex space-x-3 mt-6">
+                  <button
+                    onClick={() => setShowConfig(false)}
+                    className="flex-1 py-2 bg-gray-800 hover:bg-gray-700 rounded"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    onClick={handleConfig}
+                    disabled={isLoading}
+                    className="flex-1 py-2 bg-cyan-500 hover:bg-cyan-600 rounded disabled:opacity-50"
+                  >
+                    {isLoading ? (
+                      <div className="flex items-center justify-center">
+                        <Loader className="w-5 h-5 animate-spin mr-2" />
+                        Chargement...
+                      </div>
+                    ) : (
+                      'Configurer'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default IPTVApp;
